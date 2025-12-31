@@ -3,18 +3,22 @@ package com.malawianlad.statussaver.ui
 
 import android.app.Application
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
-import androidx.compose.foundation.layout.size
-import androidx.compose.ui.test.filter
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.map
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlin.io.path.exists
+import kotlinx.coroutines.withContext
+import android.content.ContentValues
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 
 /**
  * A simple data class to hold information about each status file we find.
@@ -73,6 +77,83 @@ class StatusViewModel(
             } catch (e: Exception) {
                 Log.e("StatusViewModel", "Error fetching statuses", e)
                 _statusFiles.value = emptyList()
+            }
+        }
+    }
+
+    /**
+     * Save a single status file (image or video) into the system Downloads folder.
+     * Calls onResult(success, message) on completion.
+     */
+    fun saveStatus(status: StatusFile, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val resolver = application.contentResolver
+                val mime = resolver.getType(status.uri) ?: if (status.isVideo) "video/mp4" else "image/jpeg"
+                val displayName = "WhatsAppStatus_${System.currentTimeMillis()}_${status.name}".replace("\\s+".toRegex(), "_")
+
+                val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Save to Downloads collection on Android 10+
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    // For older devices, fall back to general external content URI
+                    MediaStore.Files.getContentUri("external")
+                }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/StatusSaver")
+                    }
+                }
+
+                val outUri = resolver.insert(collectionUri, values)
+                if (outUri == null) {
+                    withContext(Dispatchers.Main) {
+                        onResult(false, "Failed to create destination file")
+                    }
+                    return@launch
+                }
+
+                resolver.openInputStream(status.uri).use { inputStream ->
+                    if (inputStream == null) {
+                        withContext(Dispatchers.Main) {
+                            onResult(false, "Unable to open source file")
+                        }
+                        return@launch
+                    }
+                    resolver.openOutputStream(outUri).use { outputStream ->
+                        if (outputStream == null) {
+                            withContext(Dispatchers.Main) {
+                                onResult(false, "Unable to open destination file")
+                            }
+                            return@launch
+                        }
+
+                        // Copy bytes
+                        val bis = BufferedInputStream(inputStream)
+                        val bos = BufferedOutputStream(outputStream)
+                        val buffer = ByteArray(8 * 1024)
+                        var bytes = bis.read(buffer)
+                        while (bytes >= 0) {
+                            bos.write(buffer, 0, bytes)
+                            bytes = bis.read(buffer)
+                        }
+                        bos.flush()
+                        bis.close()
+                        bos.close()
+
+                        withContext(Dispatchers.Main) {
+                            onResult(true, "Saved to Downloads/$displayName")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("StatusViewModel", "Error saving status", e)
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Error: ${e.message}")
+                }
             }
         }
     }

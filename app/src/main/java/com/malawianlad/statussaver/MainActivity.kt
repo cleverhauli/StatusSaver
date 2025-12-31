@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,11 +24,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModelProvider
 import com.malawianlad.statussaver.ui.StatusViewModel
 import com.malawianlad.statussaver.ui.StatusViewModelFactory
 import com.malawianlad.statussaver.ui.theme.StatusSaverTheme
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Card
+import androidx.compose.foundation.layout.padding
+import coil.compose.AsyncImage
 
 class MainActivity : ComponentActivity() {
 
@@ -64,14 +71,12 @@ class MainActivity : ComponentActivity() {
         } else {
             // SCENARIO 2: We have the folder. Show the statuses.
             val folderUri = Uri.parse(savedUriString)
+            // Create the ViewModel using our factory in Activity scope
+            val vm: StatusViewModel = ViewModelProvider(this, StatusViewModelFactory(application, folderUri)).get(StatusViewModel::class.java)
             setContent {
                 StatusSaverTheme {
-                    // Create the ViewModel using our factory
-                    val viewModel: StatusViewModel = viewModel(
-                        factory = StatusViewModelFactory(application, folderUri)
-                    )
-                    // Show the main screen for displaying statuses
-                    StatusListScreen(viewModel = viewModel)
+                    // Pass the Activity-scoped ViewModel into the composable
+                    StatusListScreen(viewModel = vm)
                 }
             }
         }
@@ -105,6 +110,7 @@ fun StatusListScreen(viewModel: StatusViewModel) {
     // Watch the list of files from the ViewModel.
     // The 'by' keyword makes it automatically update when the list changes.
     val statusFiles by viewModel.statusFiles.collectAsState()
+    val context = LocalContext.current
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (statusFiles.isEmpty()) {
@@ -124,9 +130,25 @@ fun StatusListScreen(viewModel: StatusViewModel) {
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(statusFiles) { file ->
-                    // For now, we just show the name of the file.
-                    // Later, we will show the actual image here.
-                    Text(text = file.name)
+                    Card(modifier = Modifier.padding(8.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(8.dp)) {
+                            // Thumbnail using Coil; Coil can load content:// URIs
+                            AsyncImage(
+                                model = file.uri,
+                                contentDescription = file.name,
+                                modifier = Modifier.size(100.dp)
+                            )
+                            Text(text = file.name)
+                            Button(onClick = {
+                                viewModel.saveStatus(file) { success, message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                }
+                            }) {
+                                Text("Save")
+                            }
+                        }
+                    }
                 }
             }
         }
